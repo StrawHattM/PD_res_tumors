@@ -1,0 +1,5 @@
+"","Gene","Hugo_Symbol","Chromosome","Start_Position","End_Position","Reference_Allele","Tumor_Seq_Allele2","t_depth","t_alt_count","VAF","Variant_Type","Variant_Classification","BIOTYPE","cDNA_position","Protein_position","Amino_acids","Tumor_Sample_Barcode","Protein_Change"
+"1","MGP_FVBNJ_G0026182","Trp53bp1","chr2",117280683,117280683,"C","A",23,22,0.96,"SNP","Nonsense_Mutation","protein_coding","979","306","E/*","D4","p.E306*"
+"2","MGP_FVBNJ_G0026182","Trp53bp1","chr2",117227723,117227723,"ATAAT","A",27,8,0.3,"DEL","Frame_Shift_Del","protein_coding","5786-5789","1908_1909","DY/X","D94","p.DY1908fs"
+"3","MGP_FVBNJ_G0026182","Trp53bp1","chr2",117245298,117245298,"GGTTT","G",8,4,0.5,"DEL","Frame_Shift_Del","protein_coding","3270-3273","1069_1070","PN/X","D6","p.PN1069fs"
+"4","MGP_FVBNJ_G0026182","Trp53bp1","chr2",117227723,117227723,"ATAAT","A",22,10,0.45,"DEL","Frame_Shift_Del","protein_coding","5786-5789","1908_1909","DY/X","D63","p.DY1908fs"
