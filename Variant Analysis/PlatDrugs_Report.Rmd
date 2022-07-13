@@ -1,0 +1,2377 @@
+---
+title: 'Platinum Drug Resistant Tumors: Variant Analysis'
+author: "Martín González Fernández"
+date: "9/7/2021"
+output:
+  html_document:
+    dev: png
+    toc: yes
+    toc_float: yes
+    number_sections: yes
+    code_folding: hide
+    code_download: yes
+runtime: shiny
+resource_files:
+- MAF_files/CARBO_10_combined.maf
+- MAF_files/CARBO_25_combined.maf
+- MAF_files/CARBO_50_combined.maf
+- MAF_files/CARBO_75_combined.maf
+- MAF_files/CARBO_all_combined.maf
+- MAF_files/CARBO_unfilt_combined.maf
+- MAF_files/CIS_10_combined.maf
+- MAF_files/CIS_25_combined.maf
+- MAF_files/CIS_50_combined.maf
+- MAF_files/CIS_75_combined.maf
+- MAF_files/CIS_all_combined.maf
+- MAF_files/CIS_unfilt_combined.maf
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(kableExtra)
+library(shiny)
+library(DT)
+library(formatR)
+options(knitr.table.format = "html")
+options(repos = BiocManager::repositories())
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(error = TRUE)
+
+
+```
+
+# Dependencies and setting up the environment 
+
+```{r initial_dependencies, echo=TRUE, message=FALSE, tidy=TRUE, warning=FALSE, results=FALSE, class.source = "fold-show"}
+# Initial Dependencies ----------------------------------------------------
+
+library(BiocManager, quietly = TRUE)
+library(BSgenome, quietly = TRUE)
+library(maftools, quietly = TRUE)
+library(mclust, quietly = TRUE)
+library(R.utils, quietly = TRUE)
+library(berryFunctions, quietly = TRUE)
+library(tidyverse, quietly = TRUE)
+library(purrr, quietly = TRUE)
+library(pheatmap, quietly = TRUE)
+library(NMF, quietly=TRUE)
+library(devtools, quietly = TRUE)
+library(ggVennDiagram, quietly = TRUE)
+library(plotly, quietly = TRUE)
+library("BSgenome.Mmusculus.UCSC.mm10", quietly = TRUE)
+library("BSgenome.Mmusculus.UCSC.mm9", quietly = TRUE)
+library("BSgenome.Mmusculus.UCSC.mm8", quietly = TRUE)
+
+
+# Functions needed for the script to work
+source("dependent_functions.R")
+
+# Creating output folders:
+mkdirs("filtered_csvs")
+mkdirs("summaries")
+
+
+```
+
+
+```{r mafs_vectors, echo=TRUE, message=FALSE, tidy=TRUE, warning=FALSE}
+# Setting up the environment ----------------------------------------------
+
+# Set up here your strings with names of MAF groups. 
+
+CIS_mafs <- c("CIS_unfilt", "CIS_10", "CIS_25", "CIS_50", "CIS_75", "CIS_all")
+
+CARBO_mafs <- c("CARBO_unfilt", "CARBO_10", "CARBO_25", "CARBO_50", "CARBO_75", "CARBO_all")
+
+all_mafs<- c("PD_unfilt", "PD_10", "PD_25", "PD_50", "PD_75", "PD_all")
+
+# Establishing FLAGS 
+
+FLAGS <- read.delim("FLAGS.txt")
+
+flags100 <-FLAGS %>% slice_max(n = 100, order_by = rank) %>% pull(gene) %>% unique() %>% str_to_title()
+flags1000 <-FLAGS %>% slice_max(n = 1000, order_by = rank) %>% pull(gene) %>% unique() %>% str_to_title()
+```
+
+This script assumes a certain structure in your project directory, where the main folder should be your working domain: "`r getwd()`/MAF_files/mafname_combined.vaf"
+If it is different, you can modify the loop or make the directory structure compliant.
+
+The assignment and cleanup loops are particularly designed for Genevia data, although certain parts can be used regardless of the source. 
+
+
+Cleanup consists of standardization of Variant Classification names to HGVS standards. 
+Moreover, it creates a column "Protein_Change" with aminoacid changes according to HGVS.short notation.
+
+Hugo symbols always are human and go in uppercase, but in this case they have been kept in title case for mouse genes.
+This can be modified using capHS() function after a MAF object.
+
+
+```{r assignment_loops, echo=TRUE, message=FALSE, tidy=TRUE, warning=FALSE, results=FALSE, cache=TRUE}
+
+for (maf in CIS_mafs) {
+  assign(x = maf, read.maf(maf = paste0(
+    "MAF_files/", paste(maf, "combined.maf", sep = "_")
+  )))
+  
+  tempname <-
+    get(maf) %>% subsetMaf(tsb = levels(get(maf)@data$Tumor_Sample_Barcode),
+                           mafObj = FALSE) %>%
+    mutate(Variant_Classification = as.character(Variant_Classification)) %>%
+    mutate(
+      Variant_Classification = replace(
+        x = Variant_Classification,
+        list = Variant_Classification == "frameshift_variant_INS",
+        values = "Frame_Shift_Ins"
+      )
+    ) %>%
+    mutate(
+      Variant_Classification = replace(
+        x = Variant_Classification,
+        list = Variant_Classification == "frameshift_variant_DEL",
+        values = "Frame_Shift_Del"
+      )
+    ) %>%
+    mutate(Variant_Classification = as.factor(Variant_Classification)) %>%
+    mutate(Tumor_Sample_Barcode = case_when(
+      Tumor_Sample_Barcode == "D4.moderate_high" ~ "D4",
+      Tumor_Sample_Barcode == "D5.moderate_high" ~ "D5",
+      Tumor_Sample_Barcode == "D94.moderate_high" ~ "D94",
+       Tumor_Sample_Barcode == "D6.moderate_high" ~ "D6",
+      Tumor_Sample_Barcode == "D63.moderate_high" ~ "D63",
+      Tumor_Sample_Barcode == "D7.moderate_high" ~ "D7",
+      TRUE ~ as.character(Tumor_Sample_Barcode)
+    )) %>%
+    filter(Hugo_Symbol %nin% flags100 & !Hugo_Symbol == "UnknownGene" & !Variant_Classification == "Targeted_Region") %>%
+    read.maf()
+  
+  tempname <- add.protchange(tempname)
+  
+  assign(x = paste0(maf), tempname)
+  
+  rm(maf, tempname)
+}
+
+for (maf in CARBO_mafs) {
+  assign(x = maf, read.maf(maf = paste0(
+    "MAF_files/", paste(maf, "combined.maf", sep = "_")
+  )))
+  
+  tempname <-
+    get(maf) %>% subsetMaf(tsb = levels(get(maf)@data$Tumor_Sample_Barcode),
+                           mafObj = FALSE) %>%
+    mutate(Variant_Classification = as.character(Variant_Classification)) %>%
+    mutate(
+      Variant_Classification = replace(
+        x = Variant_Classification,
+        list = Variant_Classification == "frameshift_variant_INS",
+        values = "Frame_Shift_Ins"
+      )
+    ) %>%
+    mutate(
+      Variant_Classification = replace(
+        x = Variant_Classification,
+        list = Variant_Classification == "frameshift_variant_DEL",
+        values = "Frame_Shift_Del"
+      )
+    ) %>%
+    mutate(Variant_Classification = as.factor(Variant_Classification)) %>%
+    mutate(Tumor_Sample_Barcode = case_when(
+      Tumor_Sample_Barcode == "D4.moderate_high" ~ "D4",
+      Tumor_Sample_Barcode == "D5.moderate_high" ~ "D5",
+      Tumor_Sample_Barcode == "D94.moderate_high" ~ "D94",
+       Tumor_Sample_Barcode == "D6.moderate_high" ~ "D6",
+      Tumor_Sample_Barcode == "D63.moderate_high" ~ "D63",
+      Tumor_Sample_Barcode == "D7.moderate_high" ~ "D7",
+      TRUE ~ as.character(Tumor_Sample_Barcode)
+    )) %>%
+    filter(Hugo_Symbol %nin% flags100 & !Hugo_Symbol == "UnknownGene" & !Variant_Classification == "Targeted_Region") %>%
+    read.maf()
+  
+  tempname <- add.protchange(tempname)
+  
+  assign(x = paste0(maf), tempname)
+  
+  rm(maf, tempname)
+}
+
+for (i in 1:length(CIS_mafs)) {
+  temp <- merge_mafs(mafs = c(get(CIS_mafs[i]), get(CARBO_mafs[i]))) %>%
+    extract.maf() %>%
+    read.maf(clinicalData = "clinical_data.tsv")
+  
+  assign(x = str_replace(CIS_mafs, "CIS", "PD")[i], value = temp)
+  
+  rm(temp, i)
+  
+}
+```
+
+
+```{r tumornames_vectors, echo=TRUE}
+
+mafcolnames<- CIS_unfilt %>% extract.maf() %>% colnames()
+
+CIS_tumornames <- get(CIS_mafs[1])@clinical.data$Tumor_Sample_Barcode
+
+CARBO_tumornames <- get(CARBO_mafs[1])@clinical.data$Tumor_Sample_Barcode
+
+all_tumornames<- get(all_mafs[1])@clinical.data$Tumor_Sample_Barcode
+
+```
+
+# Initial exploration 
+
+We can use maftools default functions to explore our data; however maftools is designed to work with a large number of samples to detect recurring mutations. In our case, we are looking for driver genes that explain the tumor phenotype as much as possible. Maftools will order genes and call "top" the ones with variants in the highest amount of samples, while we have to use other parameters to find our "top" hits. 
+
+Nevertheless, it is worth taking a look at them, and we can use the same functions to plot smaller subsets of genes ordered by our own parameters:
+
+## MAF Summaries and Oncoplots {.tabset}
+
+### Cisplatin Resistant {.tabset}
+
+```{r mafSummaries resistant, echo=TRUE, warning=FALSE, results='asis'}
+
+for (maf in CIS_mafs[1:5]){ 
+  
+  cat('\n\n####', maf, '\n\n')
+  
+  cat("\n", paste0("MAF Summary of Cisplatin Resistant Variants. Minimum depth = ", str_sub(maf, 5,10), "x."), '\n\n')
+  
+  get(maf) %>% plotmafSummary(titvRaw = FALSE, showBarcodes = TRUE, addStat = "median")
+  
+  cat("\n\nOncoplot of Cisplatin Resistant variants. Left bars equal maximum VAF. Min. depth = ", str_sub(maf, 5,10), "x.\n\n")
+
+  get(maf) %>% oncoplot(leftBarLims = c(0, 1),  
+                    leftBarData = get(maf)@data %>%
+                                   select(Hugo_Symbol, VAF) %>%
+                                   arrange(desc(VAF)) %>%
+                                   distinct(Hugo_Symbol, .keep_all=TRUE))
+  
+  }
+
+```
+
+
+### Carboplatin Resistant {.tabset}
+
+```{r mafSummaries sensitive, echo=TRUE, warning=FALSE, results='asis'}
+
+for (maf in CARBO_mafs[1:5]){ 
+  
+  cat('\n\n####', maf, '\n\n')
+  
+  cat("\n", paste0("MAF Summary of Carboplatin Resistant Variants. Minimum depth = ", str_sub(maf, 5,10), "x."), '\n\n')
+  
+  get(maf) %>% plotmafSummary(titvRaw = FALSE, showBarcodes = TRUE, addStat = "median")
+  
+  cat("\n\nOncoplot of Carboplatin Resistant variants. Left bars equal maximum VAF. Min. depth = ", str_sub(maf, 5,10), "x.\n\n")
+
+  get(maf) %>% oncoplot(leftBarLims = c(0, 1),  
+                    leftBarData = get(maf)@data %>%
+                                   select(Hugo_Symbol, VAF) %>%
+                                   arrange(desc(VAF)) %>%
+                                   distinct(Hugo_Symbol, .keep_all=TRUE))
+  
+  }
+
+```
+
+
+## Coverage and VAF distribution:
+
+It is a good idea to see how some of our samples are distributed: sequencing depth and VAF are two important parameters which we will be using to filter our data. 
+
+```{r depth/VAF histograms, echo=TRUE, fig.show="hold", out.width="50%"}
+
+## Sequencing Depth
+
+CIS_unfilt %>%
+  extract.maf() %>%
+  ggplot(aes(t_depth, fill=..x..)) +
+  geom_histogram(bins = 100) +
+  scale_fill_distiller(palette = "YlOrRd")+
+  ggtitle(paste("Sequencing depth in Unfiltered Cisplatin Resistant"))
+
+CARBO_unfilt %>%
+  extract.maf() %>%
+  ggplot(aes(t_depth, fill=..x..)) +
+  geom_histogram(bins = 100)+
+  scale_fill_distiller(palette = "BuPu") +
+  ggtitle(paste("Sequencing depth in Unfiltered Carboplatin Resistant"))
+
+## Variant Allele Fraction (VAF)
+
+CIS_unfilt %>%
+  extract.maf() %>%
+  ggplot(aes(VAF, fill=..x..)) +
+  geom_histogram(bins = 100)+
+  scale_fill_distiller(palette = "YlOrBr") +
+  ggtitle(paste("Variant Allele Fraction in Unfiltered Cisplatin Resistant"))
+
+CARBO_unfilt %>%
+  extract.maf() %>%
+  ggplot(aes(VAF, fill=..x..)) +
+  geom_histogram(bins = 100)+
+  scale_fill_distiller(palette = "Blues") +
+  ggtitle(paste("Variant Allele Fraction in Unfiltered Carboplatin Resistant"))
+
+```
+
+## Summary tables per Variant Consequence {.tabset}
+
+We can check parameters of our data (such as VAF or depth) based on the kind of variant.
+
+This is the more detailed classification (found in MAF files under "Variant Classification") that details the consequence of each variant when compared against the reference genome and its annotations.:
+
+* **Frame_Shift_Del**: Frameshift deletion
+* **Frame_Shift_Ins**: Frameshift insertion
+* **In_Frame_Del**: In-Frame deletion
+* **In_Frame_Ins**: In-Frame insertion
+* **Missense_Mutation**: Single aminoacid substitution
+* **Nonsense_Mutation**: Early introduction of a stop (nonsense) codon, resulting in a shorter, unfinished protein
+* **Nonstop_Mutation**: Mutation of a stop codon that causes continued translation of a mRNA strand into UTR
+* **Splice_Site**: Mutation at the boundary of an exon and an intron, where splicing would occur.
+* **Translation_Start_Site**: Mutations in the *AUG* initiation codon 
+* **Targeted_Region**: This is a special term generated by the vcf2maf program to convert from the "Consequence" column of VCFs into the "Variant Classification" column of MAFs. [I found this explanation online](https://github.com/mskcc/vcf2maf/issues/33#issuecomment-173599460). It spans different types of variants (as per VCF "Consequence" terms):
+  + TFBS_ablation
+  + TFBS_amplification
+  + regulatory_region_ablation
+  + regulatory_region_amplification
+  + feature_elongation
+  + feature_trunctation
+
+
+Please keep in mind that the genomic region where the variant is placed and its functional consequence are prioritized over the type of variant. *e.g.*: something that alters an splicing site will be labeled as Splice_Site regardless of whether it is an insertion, a deletion or a polymorphism.
+
+If we want to distinguish only between Insertions, Deletions and Single/Oligo Nucleotide Polymorphisms, we can easily do it by changing "group_by(Variant_Classification)" in the code to "group_by(Variant_Type)".
+
+It is useful to do this with unfiltered data or data with a low sequencing depth filter, in order to see the "raw" distribution amongst the moderate/high impact variants. 
+
+```{r initial summaries, echo= TRUE, out.width="50%", results='asis'}
+
+for (maf in c("CIS_unfilt", "CIS_10", "CARBO_unfilt", "CARBO_10")) {
+  
+  cat('\n\n### ', maf, '\n\n', sep="")
+  
+  cat("\n")
+  cat(paste("Summary of", maf, "organized by Variant Consequence"))
+  cat("\n")
+  
+  get(maf) %>%
+    extract.maf() %>%
+    group_by(Variant_Classification) %>%
+    summarise(
+      Variants = n(),
+      Genes = n_distinct(Hugo_Symbol),
+      Mean_depth = mean(t_depth),
+      Median_depth = median(t_depth),
+      Mean_VAF = mean(VAF),
+      Median_VAF = median(VAF)
+    ) %>%
+    kbl() %>%
+    kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+    print()
+  
+}
+```
+
+
+## Transitions and Transversions {.tabset}
+
+Finally, seeing how the transition or transversions patterns differ from sample to sample can give us an idea about signature changes or if there is a preference for a particular kind of modification. This can be relevant when checking the effect of DNA damage. 
+
+A few things to keep in mind: 
+
+* Because of the molecular mechanisms by which they are generated, transitions are more common than transversions.
+* However, keep in mind that the data that we will mostly work with is filtered for moderate/high impact variants. This means that there will be a bias against silent substitutions, which can result in transversion overrepresentation. 
+
+This is the reason why I have included both filtered and unfiltered datasets.
+
+### All variants
+
+```{r titv_all, echo=TRUE, fig.show='hold', out.width="50%"}
+
+CIS.titv <- CIS_all %>% titv(plot = FALSE, useSyn = TRUE)
+CARBO.titv <- CARBO_all %>% titv(plot = FALSE, useSyn = TRUE)
+
+plotTiTv(CIS.titv, showBarcodes = TRUE)
+mtext("Cisplatin Resistant, all variants", line=-1.5, cex=1.5, outer = TRUE)
+plotTiTv(CARBO.titv, showBarcodes = TRUE)
+mtext("Carboplatin Resistant, all variants", line=-1.5, cex=1.5, outer = TRUE)
+```
+
+### Moderate/high impact variants
+
+```{r titv_unfilt, echo=TRUE, fig.show='hold', out.width="50%"}
+
+
+
+CIS_unfilt.titv <- CIS_unfilt %>% titv(plot = FALSE, useSyn = TRUE)
+CARBO_unfilt.titv <- CARBO_unfilt %>% titv(plot = FALSE, useSyn = TRUE)
+
+plotTiTv(CIS_unfilt.titv, showBarcodes = TRUE)
+mtext("Cisplatin Resistant, moderate/high variants", line=-1.5, cex=1.5, outer = TRUE)
+plotTiTv(CARBO_unfilt.titv, showBarcodes = TRUE)
+mtext("Carboplatin Resistant, moderate/high variants", line=-1.5, cex=1.5, outer = TRUE)
+
+```
+
+
+# VAF thresholding and Heterogeneity Analysis
+
+## Heterogeneity analysis {.tabset}
+
+### Cisplatin Resistant
+
+```{r heterogeneity.cis analysis assignments, message=FALSE, warning=FALSE, results=FALSE}
+
+heterogeneity.cis.10 <- inferHeterogeneity(CIS_10, vafCol = 'VAF')
+
+heterogeneity.cis.10_vaf0.1 <- inferHeterogeneity(CIS_10, vafCol = 'VAF', minVaf = 0.1)
+
+heterogeneity.cis.10_all <- CIS_10 %>% 
+  extract.maf() %>%
+  mutate(Tumor_Sample_Barcode="All_Samples") %>%
+  read.maf() %>%
+  inferHeterogeneity(vafCol = "VAF") 
+
+```
+
+To perform heterogeneity analysis, we will take all variants above a low filtering threshold, so that we can filter out small artifacts. 
+
+Initially, we can plot all samples in the same graph, which can be similar to the density plot from above.
+
+```{r het.cis_clusters all samples, echo=TRUE, message=FALSE, warning=FALSE}
+heterogeneity.cis.10_all %>%
+  plotClusters(genes= CIS_10@data %>% 
+                 filter(!Hugo_Symbol == "UnknownGene") %>%
+                 arrange(desc(VAF)) %>%
+                 distinct(Hugo_Symbol, .keep_all=TRUE) %>%
+                 slice_max(n=20, order_by=VAF) %>%
+                 pull(Hugo_Symbol)) 
+
+mtext("Cisplatin Resistant, all tumors", line=-2, cex=1.5, outer = TRUE)
+```
+
+We can also plot the heterogeneity analysis of all samples by unifying tumor labels, but this is not so useful to extract information from the clusters. It serves as a more detailed density plot with the cluster analysis that can help us decide on a VAF threshold.
+
+Heterogeneity analysis takes the VAF distribution of individual variants throughout each sample and tries to find clusters. The idea behind would beto find portions of the bulk sequencing that share the same mutations. 
+Biologically speaking, we could assign this to different events:  In perfectly distributed samples, clusters around VAF 0.8-1 speak of LoH events, while clusters around 0.5 speak of monoallelic modifications in the whole tumor
+
+However, it is not always possible to see this distribution (as in Conchita's paper) when bulk sequencing tumors, specially those with high mutational loads. In these cases it is more difficult to assign particular events to VAF density clusters and we can use this to try to see shared mutations in "intratumoral populations". 
+
+A good filtering strategy in the latter type of samples is to use low minimum depth but to filter out the low VAF, background mutations that mask the smaller clusters of higher VAF. We can see side by side comparisons of each tumor's VAF density clustering with and without VAF>0.1 filtering
+
+
+```{r het.cis_clusters per sample, out.width="50%", fig.show="hold", message=FALSE, warning=FALSE, echo=TRUE}
+
+for (i in 1:length(CIS_tumornames)) {
+  
+  plotClusters(heterogeneity.cis.10,
+               tsb = CIS_tumornames[i],
+               genes= CIS_10 %>%
+                 extract.maf() %>% 
+                 filter(!Hugo_Symbol == "UnknownGene" & Tumor_Sample_Barcode == CIS_tumornames[i]) %>%
+                 arrange(desc(VAF)) %>%
+                 distinct(Hugo_Symbol, .keep_all=TRUE) %>%
+                 slice_max(n=10, order_by=VAF) %>%
+                 pull(Hugo_Symbol))
+  
+  mtext(paste(CIS_tumornames[i], ", unfiltered"), line=-2, cex=1, outer = TRUE) 
+  
+  plotClusters(heterogeneity.cis.10_vaf0.1,
+               tsb = CIS_tumornames[i],
+               genes= CIS_10 %>%
+                 extract.maf() %>% 
+                 filter(!Hugo_Symbol == "UnknownGene" & Tumor_Sample_Barcode == CIS_tumornames[i]) %>%
+                 arrange(desc(VAF)) %>%
+                 distinct(Hugo_Symbol, .keep_all=TRUE) %>%
+                 slice_max(n=10, order_by=VAF) %>%
+                 pull(Hugo_Symbol))
+  
+  mtext(paste(CIS_tumornames[i], ", VAF>0.1"), line=-2, cex=1, outer = TRUE)
+}
+```
+
+
+```{r clusters_table.cis, message=FALSE, warning=FALSE, echo=TRUE, results='asis'}
+combined_means<- 
+  bind_rows(
+  list(
+    original = heterogeneity.cis.10$clusterMeans,
+    "VAF>0.1" = heterogeneity.cis.10_vaf0.1$clusterMeans
+  ),
+  .id = "set"
+) 
+
+kables(list(
+  kable(combined_means[set == "original"] %>% select(-set),
+        caption = "Unfiltered Cluster Means") %>%
+    kable_styling(
+      full_width = FALSE,
+      bootstrap_options = c("striped", "hover", "condensed", "responsive")
+    ),
+  
+  kable(combined_means[set == "VAF>0.1"] %>% select(-set),
+        caption = "VAF>0.1 Cluster means") %>%
+    kable_styling(
+      full_width = FALSE,
+      bootstrap_options = c("striped", "hover", "condensed", "responsive")
+    )
+))
+
+```
+
+### Carboplatin Resistant
+
+
+```{r heterogeneity analysis assignments, message=FALSE, warning=FALSE, results=FALSE}
+
+heterogeneity.carbo.10 <- inferHeterogeneity(CARBO_10, vafCol = 'VAF')
+
+heterogeneity.carbo.10_vaf0.1 <- inferHeterogeneity(CARBO_10, vafCol = 'VAF', minVaf = 0.1)
+
+heterogeneity.carbo.10_all <- CARBO_10 %>% 
+  extract.maf() %>%
+  mutate(Tumor_Sample_Barcode="All_Samples") %>%
+  read.maf() %>%
+  inferHeterogeneity(vafCol = "VAF") 
+
+```
+
+To perform heterogeneity analysis, we will take all variants above a low filtering threshold, so that we can filter out small artifacts. 
+
+Initially, we can plot all samples in the same graph, which can be similar to the density plot from above.
+
+```{r het_clusters all samples, echo=TRUE, message=FALSE, warning=FALSE}
+heterogeneity.carbo.10_all %>%
+  plotClusters(genes= CARBO_10@data %>% 
+                 filter(!Hugo_Symbol == "UnknownGene") %>%
+                 arrange(desc(VAF)) %>%
+                 distinct(Hugo_Symbol, .keep_all=TRUE) %>%
+                 slice_max(n=20, order_by=VAF) %>%
+                 pull(Hugo_Symbol)) 
+
+mtext("Carboplatin Resistant, all tumors", line=-2, cex=1.5, outer = TRUE)
+```
+
+We can also plot the heterogeneity analysis of all samples by unifying tumor labels, but this is not so useful to extract information from the clusters. It serves as a more detailed density plot with the cluster analysis that can help us decide on a VAF threshold.
+
+Heterogeneity analysis takes the VAF distribution of individual variants throughout each sample and tries to find clusters. The idea behind would beto find portions of the bulk sequencing that share the same mutations. 
+Biologically speaking, we could assign this to different events:  In perfectly distributed samples, clusters around VAF 0.8-1 speak of LoH events, while clusters around 0.5 speak of monoallelic modifications in the whole tumor
+
+However, it is not always possible to see this distribution (as in Conchita's paper) when bulk sequencing tumors, specially those with high mutational loads. In these cases it is more difficult to assign particular events to VAF density clusters and we can use this to try to see shared mutations in "intratumoral populations". 
+
+A good filtering strategy in the latter type of samples is to use low minimum depth but to filter out the low VAF, background mutations that mask the smaller clusters of higher VAF. We can see side by side comparisons of each tumor's VAF density clustering with and without VAF>0.1 filtering
+
+
+```{r het_clusters per sample, out.width="50%", fig.show="hold", message=FALSE, warning=FALSE, echo=TRUE}
+
+for (i in 1:length(CARBO_tumornames)) {
+  
+  plotClusters(heterogeneity.carbo.10,
+               tsb = CARBO_tumornames[i],
+               genes= CARBO_10 %>%
+                 extract.maf() %>% 
+                 filter(!Hugo_Symbol == "UnknownGene" & Tumor_Sample_Barcode == CARBO_tumornames[i]) %>%
+                 arrange(desc(VAF)) %>%
+                 distinct(Hugo_Symbol, .keep_all=TRUE) %>%
+                 slice_max(n=10, order_by=VAF) %>%
+                 pull(Hugo_Symbol))
+  
+  mtext(paste(CARBO_tumornames[i], ", unfiltered"), line=-2, cex=1, outer = TRUE) 
+  
+  plotClusters(heterogeneity.carbo.10_vaf0.1,
+               tsb = CARBO_tumornames[i],
+               genes= CARBO_10 %>%
+                 extract.maf() %>% 
+                 filter(!Hugo_Symbol == "UnknownGene" & Tumor_Sample_Barcode == CARBO_tumornames[i]) %>%
+                 arrange(desc(VAF)) %>%
+                 distinct(Hugo_Symbol, .keep_all=TRUE) %>%
+                 slice_max(n=10, order_by=VAF) %>%
+                 pull(Hugo_Symbol))
+  
+  mtext(paste(CARBO_tumornames[i], ", VAF>0.1"), line=-2, cex=1, outer = TRUE)
+}
+```
+
+
+```{r clusters_table, message=FALSE, warning=FALSE, echo=TRUE, results='asis'}
+combined_means<- 
+  bind_rows(
+  list(
+    original = heterogeneity.carbo.10$clusterMeans,
+    "VAF>0.1" = heterogeneity.carbo.10_vaf0.1$clusterMeans
+  ),
+  .id = "set"
+) 
+
+kables(list(
+  kable(combined_means[set == "original"] %>% select(-set),
+        caption = "Unfiltered Cluster Means") %>%
+    kable_styling(
+      full_width = FALSE,
+      bootstrap_options = c("striped", "hover", "condensed", "responsive")
+    ),
+  
+  kable(combined_means[set == "VAF>0.1"] %>% select(-set),
+        caption = "VAF>0.1 Cluster means") %>%
+    kable_styling(
+      full_width = FALSE,
+      bootstrap_options = c("striped", "hover", "condensed", "responsive")
+    )
+))
+
+```
+
+
+## VAF distribution above different filtering levels
+
+Using this widget, we can check how the Variant Allele Fraction is distributed amongst certain thresholds:
+
+```{r VAF histogram widget, echo=TRUE}
+titlePanel("Custom VAF histogram")
+
+sidebarLayout(
+  
+  sidebarPanel(
+      selectInput(inputId = "hist.MAF",
+                  label= "MAF object to plot",
+                  choices = mget(ls()[str_detect(ls(), "mafs")]),
+                  selected="CIS_all"),
+      
+      sliderInput(inputId = "hist.min_VAF",
+                  label = "Minimum Variant Allele Fraction",
+                  min = 0,
+                  max = 1,
+                  step= 0.05,
+                  value= 0.2),
+      
+      sliderInput(inputId = "hist.min_depth",
+                  label = "Minimum filtering depth",
+                  min = 0,
+                  max = 100,
+                  step= 5,
+                  value= 10)
+      
+  ),
+  mainPanel(
+    renderPlot(
+      
+      get(input$hist.MAF) %>% 
+        extract.maf() %>% 
+        filter(t_depth >= input$hist.min_depth & VAF >= input$hist.min_VAF) %>%
+        ggplot(aes(VAF))+
+          geom_histogram(bins=100)+
+          xlim(c(0,1))+
+          ggtitle(paste("Histogram of Variant Allele Fraction in", input$hist.MAF))
+        
+    )
+  )
+)
+
+
+```
+
+
+
+## VAF tables {.tabset}
+
+Using a list of MAFs filtered at different sequencing depth levels (as Genevia provides), we can check how many unique genes or variants are above different VAF thresholds:
+
+This will give us an idea of how many variants are altered at each filtering level.
+While the overall number will not change much, it is a good idea to make decisions based not on the number of variants, but the number of genes affected: We will group the variants for each gene togther and evaluate their relevance at a gene level, not variant by variant. 
+
+In the end, our goal is to obtain a list of genes to test further or to look for elsewhere. Let's check which genes have variants above each of the thresholds.
+
+### Cisplatin Resistant {.tabset}
+
+#### Genes
+```{r CIS_ vaftable definition and genes}
+vaf.table<-function(maflist, thresholds=seq(0, 0.9, by=0.1), unique="genes", basename=NULL){
+  
+  if (!unique == "genes" & !unique == "variants"){
+    stop("Please specify a correct value for \"unique\" argument. default=\"genes\", also admits \"variants\".")
+  }
+  else {
+    if (unique == "genes") {
+      
+      #Wrapper to create the temp vector with results for each MAF in maflist
+      for (maf in maflist) {  
+        
+        #create empty vector with name for temp list. 1/maf
+        assign(paste("genes", maf, sep="_"), c()) 
+        
+        #applies to the maf the same function with different VAF thresholds
+        for(vaf in thresholds){ 
+          
+          # "a" is a temporary variable that serves to store the length output for each VAF threshold in each cycle
+          a<- get(maf)@data %>%
+            filter(VAF>=vaf) %>% 
+            pull(Hugo_Symbol) %>% 
+            unique() %>% 
+            length()
+          
+          # glues "a" at the end of the specific maf vector
+          assign(x=paste("genes", maf, sep="_"), value = c(get(paste("genes", maf, sep="_")), a))
+          
+        }
+      }
+      
+      #creating an identifiable vector of the temp vectors names 
+      vafgenestablenames<- paste("genes", maflist, sep="_") 
+      
+      #skeleton (empty df) of the final table
+      vaf.gene.table<- data.frame()
+      
+      #binds one by one the temp vectors into a data frame, rowwise in the order of maflist
+      for(i in 1:length(vafgenestablenames)){
+        vaf.gene.table<-rbind(vaf.gene.table, get(vafgenestablenames[i]))
+      }
+      
+      #setting dimnames for the final table
+      rownames(vaf.gene.table)<-maflist
+      colnames(vaf.gene.table)<- paste0("VAF>", thresholds)
+      
+      if(!is.null(basename)){
+        
+        vaf.gene.table %>% write.csv(file=paste0(basename, "_VAFtable.csv"))
+      }
+      
+      #return
+      return(vaf.gene.table)
+      
+    }  
+    else{
+      if (unique == "variants") {
+        
+        for(maf in maflist){
+          
+          assign(paste("variants", maf, sep="_"), c())
+          for(vaf in thresholds){
+            
+            a<- get(maf)@data %>%
+              filter(VAF>=vaf) %>% 
+              pull(Hugo_Symbol) %>% 
+              length()
+            
+            assign(x=paste("variants", maf, sep="_"), value = c(get(paste("variants", maf, sep="_")), a))
+          }
+        }
+        
+        vafvariantstablenames<- paste("variants", maflist, sep="_") 
+        vaf.variant.table<- data.frame()
+        
+        for(i in 1:length(vafvariantstablenames)){
+          vaf.variant.table<-rbind(vaf.variant.table, get(vafvariantstablenames[i]))
+        }
+        
+        rownames(vaf.variant.table)<-maflist
+        colnames(vaf.variant.table)<- paste0("VAF>", thresholds)
+        
+        if(!is.null(basename)){
+          
+          vaf.variant.table %>% write.csv(file=paste0(basename, "_VAFtable.csv"))
+        }
+        
+        vaf.variant.table
+        
+      }
+    }
+  }
+}
+
+cat("Unique genes with variants at different levels of VAF and Coverage filtering")
+
+CIS_genesvaftable<-vaf.table(CIS_mafs[1:5])
+
+CIS_genesvaftable %>%
+  kbl() %>% 
+  kable_styling(
+      full_width = FALSE,
+      bootstrap_options = c("striped", "hover", "condensed", "responsive")
+  )
+
+       
+```
+
+#### Variants
+```{r CIS_ vaf.table variants}
+
+
+cat("Variants at different levels of VAF and Coverage filtering")
+
+CIS_varsvaftable<- vaf.table(CIS_mafs[1:5], unique = "variants")
+
+CIS_varsvaftable %>%
+  kbl() %>% 
+  kable_styling(
+      full_width = FALSE,
+      bootstrap_options = c("striped", "hover", "condensed", "responsive")
+  )
+```
+
+
+
+### Carboplatin Resistant {.tabset}
+#### Genes
+```{r CARBO_ vaftable definition and genes}
+vaf.table<-function(maflist, thresholds=seq(0, 0.9, by=0.1), unique="genes", basename=NULL){
+  
+  if (!unique == "genes" & !unique == "variants"){
+    stop("Please specify a correct value for \"unique\" argument. default=\"genes\", also admits \"variants\".")
+  }
+  else {
+    if (unique == "genes") {
+      
+      #Wrapper to create the temp vector with results for each MAF in maflist
+      for (maf in maflist) {  
+        
+        #create empty vector with name for temp list. 1/maf
+        assign(paste("genes", maf, sep="_"), c()) 
+        
+        #applies to the maf the same function with different VAF thresholds
+        for(vaf in thresholds){ 
+          
+          # "a" is a temporary variable that serves to store the length output for each VAF threshold in each cycle
+          a<- get(maf)@data %>%
+            filter(VAF>=vaf) %>% 
+            pull(Hugo_Symbol) %>% 
+            unique() %>% 
+            length()
+          
+          # glues "a" at the end of the specific maf vector
+          assign(x=paste("genes", maf, sep="_"), value = c(get(paste("genes", maf, sep="_")), a))
+          
+        }
+      }
+      
+      #creating an identifiable vector of the temp vectors names 
+      vafgenestablenames<- paste("genes", maflist, sep="_") 
+      
+      #skeleton (empty df) of the final table
+      vaf.gene.table<- data.frame()
+      
+      #binds one by one the temp vectors into a data frame, rowwise in the order of maflist
+      for(i in 1:length(vafgenestablenames)){
+        vaf.gene.table<-rbind(vaf.gene.table, get(vafgenestablenames[i]))
+      }
+      
+      #setting dimnames for the final table
+      rownames(vaf.gene.table)<-maflist
+      colnames(vaf.gene.table)<- paste0("VAF>", thresholds)
+      
+      if(!is.null(basename)){
+        
+        vaf.gene.table %>% write.csv(file=paste0(basename, "_VAFtable.csv"))
+      }
+      
+      #return
+      return(vaf.gene.table)
+      
+    }  
+    else{
+      if (unique == "variants") {
+        
+        for(maf in maflist){
+          
+          assign(paste("variants", maf, sep="_"), c())
+          for(vaf in thresholds){
+            
+            a<- get(maf)@data %>%
+              filter(VAF>=vaf) %>% 
+              pull(Hugo_Symbol) %>% 
+              length()
+            
+            assign(x=paste("variants", maf, sep="_"), value = c(get(paste("variants", maf, sep="_")), a))
+          }
+        }
+        
+        vafvariantstablenames<- paste("variants", maflist, sep="_") 
+        vaf.variant.table<- data.frame()
+        
+        for(i in 1:length(vafvariantstablenames)){
+          vaf.variant.table<-rbind(vaf.variant.table, get(vafvariantstablenames[i]))
+        }
+        
+        rownames(vaf.variant.table)<-maflist
+        colnames(vaf.variant.table)<- paste0("VAF>", thresholds)
+        
+        if(!is.null(basename)){
+          
+          vaf.variant.table %>% write.csv(file=paste0(basename, "_VAFtable.csv"))
+        }
+        
+        vaf.variant.table
+        
+      }
+    }
+  }
+}
+
+cat("Unique genes with variants at different levels of VAF and Coverage filtering")
+
+CARBO_genesvaftable<-vaf.table(CARBO_mafs[1:5])
+
+CARBO_genesvaftable %>%
+  kbl() %>% 
+  kable_styling(
+      full_width = FALSE,
+      bootstrap_options = c("striped", "hover", "condensed", "responsive")
+  )
+
+       
+```
+
+#### Variants
+```{r CARBO_ vaf.table variants}
+
+
+cat("Variants at different levels of VAF and Coverage filtering")
+
+CARBO_varsvaftable<- vaf.table(CARBO_mafs[1:5], unique = "variants")
+
+CARBO_varsvaftable %>%
+  kbl() %>% 
+  kable_styling(
+      full_width = FALSE,
+      bootstrap_options = c("striped", "hover", "condensed", "responsive")
+  )
+```
+
+
+
+## {-}
+
+Using this information, we can decide on the exact thresholds to filter our samples with. 
+
+We can see that the total number of genes with alterations without any filtering applied is `r CIS_genesvaftable[1,1]` for cisplatin resistant samples and `r CARBO_genesvaftable[1,1]` for carboplatin resistant samples. The total number of variants is `r CIS_varsvaftable[1,1]` in the cisplatin resistant tumors and `r CARBO_varsvaftable[1,1]` in the carboplatin resistant tumors.  
+
+As we can see from the tables, there aren't many 
+
+Using the following widget, you can specify and select your desired thresholds based on the tables above.
+
+```{r custom filtering table, echo=TRUE}
+titlePanel("Custom filtering table")
+wellPanel(
+fluidRow(column(width=6,
+                  
+      selectInput(inputId = "table.MAF",
+                  label= "MAF object to plot",
+                  choices = c(CIS_mafs, CARBO_mafs)),
+      
+      sliderInput(inputId = "table.min_VAF",
+                  label = "Minimum Variant Allele Fraction",
+                  min = 0,
+                  max = 1,
+                  step= 0.05,
+                  value= 0.2),
+      
+      sliderInput(inputId = "table.min_depth",
+                  label = "Minimum filtering depth",
+                  min = 0,
+                  max = 100,
+                  step= 5,
+                  value= 10),
+      
+      actionButton(inputId = "table.writecsv",
+                   label = "Write CSV")
+      
+    ), column(width = 6,
+            
+      checkboxGroupInput(inputId = "table.columns",
+                         label = "Columns",
+                         choices = mafcolnames,
+                         selected= c("Hugo_Symbol", "Chromosome", "t_depth", "VAF", "Variant_Classification", "Protein_Change"))
+    ) 
+  )
+)
+
+fixedRow(column(width = 12, 
+                  renderDataTable(
+                          get(input$table.MAF) %>%
+                          subsetMaf(tsb=levels(get(input$table.MAF)@data$Tumor_Sample_Barcode),
+                                    mafObj=FALSE) %>%
+                          filter(t_depth >= input$table.min_depth & VAF >= input$table.min_VAF) %>%
+                          select(input$table.columns)
+                   )
+  )
+)
+observeEvent(input$table.writecsv, 
+            get(input$table.MAF) %>%
+              subsetMaf(tsb=levels(get(input$table.MAF)@data$Tumor_Sample_Barcode),
+                        mafObj=FALSE) %>%
+              filter(t_depth >= input$table.min_depth & VAF >= input$table.min_VAF) %>%
+              select(input$table.columns) %>%
+              write.csv(file=paste0("filtered_csvs/", paste(input$table.MAF, 
+                                   input$table.min_depth,
+                                   "depth",
+                                   input$table.min_VAF,
+                                   "VAF.csv", sep = "_")))
+            )
+
+```
+
+## Enriched genes overview {.tabset}
+
+I will proceed with a strict filtering, taking Depth > 25 & VAF > 0.2 (`r CIS_genesvaftable["CIS_25", "VAF>0.2"]` unique genes):
+
+We can proceed to use the package tools in order to better see these ;
+
+### Cisplatin
+
+```{r cisplatin enriched_genes, fig.show='hold', results='hide', warning=FALSE}
+cis_vafenriched <- CIS_25 %>% extract.maf() %>% filter(VAF>=0.2) %>% pull(Hugo_Symbol) %>% unique()
+
+CIS_25 %>% subsetMaf(genes=cis_vafenriched) %>% plotmafSummary()
+
+CIS_25 %>% subsetMaf(genes=cis_vafenriched) %>% oncoplot() 
+
+```
+
+```{r, results='asis'}
+
+cat("Enriched genes with variants above 0.2 VAF and 25x sequencing depth:")
+cat("<details><summary>Click here to display the list</summary>") 
+
+cat(paste0("- ", cis_vafenriched), sep = "\n")
+
+cat('</details>')
+
+if (sum(cis_vafenriched %in% flags1000)>0){
+  warning("Caution: the following genes are amongst the top 1000 most commonly mutated genes in the FLAGS dataset:")
+  cat(paste0("- `",cis_vafenriched[cis_vafenriched %in% flags1000], "`"), sep="\n")
+}
+
+
+
+```
+
+The next boxplot depicts the 40 genes with highest VAF variants above 25x filtering depth.
+Represented are only the variants above 0.1, to avoid the median being brought down by irrelevant variants. 
+
+```{r cis enriched_genes_VAF, message=FALSE, results=FALSE}
+plotVaf(
+  CIS_25 %>% subsetMaf(query = "VAF>=0.1"),
+  vafCol = "VAF",
+  genes = CIS_25 %>%
+    extract.maf() %>%
+    filter(VAF >= 0.2) %>%
+    arrange(desc(VAF)) %>%
+    distinct(Hugo_Symbol, .keep_all = TRUE) %>%
+    filter(!Hugo_Symbol == "UnknownGene") %>%
+    slice_max(n = 40, order_by = VAF) %>%
+    pull(Hugo_Symbol),
+  orderByMedian = TRUE
+)
+
+mtext("Variant Allele Fraction, enriched variants above 25x ", line=-1, cex=1, outer = TRUE)
+```
+
+
+```{r cis nriched_genes summaries and csv , message=FALSE, results=FALSE}
+CIS_25 %>%
+  subsetMaf(genes = cis_vafenriched) %>% 
+  write.mafSummary(basename = "summaries/CIS_vafenriched")
+
+CIS_25 %>% 
+  subsetMaf(genes=cis_vafenriched) %>%
+  extract.maf() %>%
+  write.csv(file="filtered_csvs/CIS_vafenriched.csv")
+
+```
+
+You will find summaries of the mutations in these genes in your "summaries" folder, as well as the .csv in the "filtered_csvs" folder.
+
+### Carboplatin
+
+```{r carboplatin enriched_genes, fig.show='hold', results='hide', warning=FALSE}
+CARBO_vafenriched <- CARBO_25 %>% extract.maf() %>% filter(VAF>=0.2) %>% pull(Hugo_Symbol) %>% unique()
+
+CARBO_25 %>% subsetMaf(genes=CARBO_vafenriched) %>% plotmafSummary()
+
+CARBO_25 %>% subsetMaf(genes=CARBO_vafenriched) %>% oncoplot() 
+
+```
+
+```{r, results='asis'}
+
+cat("Enriched genes with variants above 0.2 VAF and 25x sequencing depth:")
+cat("<details><summary>Click here to display the list</summary>") 
+
+cat(paste0("- ", CARBO_vafenriched), sep = "\n")
+
+cat('</details>')
+
+if (sum(CARBO_vafenriched %in% flags1000)>0){
+  warning("Caution: the following genes are amongst the top 1000 most commonly mutated genes in the FLAGS dataset:")
+  cat(paste0("- `",CARBO_vafenriched[CARBO_vafenriched %in% flags1000], "`"), sep="\n")
+}
+
+
+
+```
+
+The next boxplot depicts the 40 genes with highest VAF variants above 25x filtering depth.
+Represented are only the variants above 0.1, to avoid the median being brought down by irrelevant variants. 
+
+```{r carbo enriched_genes_VAF, message=FALSE, results=FALSE}
+plotVaf(
+  CARBO_25 %>% subsetMaf(query = "VAF>=0.1"),
+  vafCol = "VAF",
+  genes = CARBO_25 %>%
+    extract.maf() %>%
+    filter(VAF >= 0.2) %>%
+    arrange(desc(VAF)) %>%
+    distinct(Hugo_Symbol, .keep_all = TRUE) %>%
+    filter(!Hugo_Symbol == "UnknownGene") %>%
+    slice_max(n = 40, order_by = VAF) %>%
+    pull(Hugo_Symbol),
+  orderByMedian = TRUE
+)
+
+mtext("Variant Allele Fraction, enriched variants above 25x ", line=-1, cex=1, outer = TRUE)
+```
+
+
+```{r carbo enriched_genes summaries and csv , message=FALSE, results=FALSE}
+CARBO_25 %>%
+  subsetMaf(genes = CARBO_vafenriched) %>% 
+  write.mafSummary(basename = "summaries/CARBO_vafenriched")
+
+CARBO_25 %>% 
+  subsetMaf(genes=CARBO_vafenriched) %>%
+  extract.maf() %>%
+  write.csv(file="filtered_csvs/CARBO_vafenriched.csv")
+
+```
+
+You will find summaries of the mutations in these genes in your "summaries" folder, as well as the .csv in the "filtered_csvs" folder.
+
+
+
+# Positional Analysis
+
+Apart from looking at variants that are present throughout the whole sequencing/tumor, we can use other strategies to look for significant genes. 
+
+We know that mutation hotspots are a hallmark of cancers, correlating with their chromosomal and genomic instability. 
+Knowing this, we can specifically look for hotspots, which will also allow us to not be so stringent with VAF: within the same sample, it is not so important that every cell in the tumor has the same mutation, but it is notable if most of them accumulate specific types of mutations in the same places.
+
+We can look at these hotspots at two different levels: chromosomic with rainfall plots and genic with OncodriveCLUSTL.
+
+
+## Rainfall Plots and Kataegis tables {.tabset}
+
+By looking at the distance between mutations, we can see if there are kataegis: patterned, localized hypermutated regions that are characteristic of certain cancer genomes. Prevalently, they are seen amongst breast cancer patients. One of this characteristic patterns is APOBEC-derived pattern, which we will check specifically when we perform signature analysis. The following analysis takes as a kataegis any six consecutive mutations with an average distance of 1000 bp. 
+
+We need to take into account our desired filtering levels. I applied a filter for variant reads>=2, to rule out background mutations that will cause false positives. In here, filtering directly over VAF can filter out true mutations that we are interested in for positional analysis. Therefore, to filter out just sequencing artifacts, we filter based on variant reads. 
+This is the same as applying a more stringent VAF threshold to less sequenced regions while being more permissive in more sequenced regions. You can see that in the next graph
+
+<details><summary>Click here to display the theoretical VAF threshold at each depth level </summary>
+
+```{r}
+data.frame(t_depth=seq(10,100, by=1), VAF=2/seq(10,100, by=1)) %>% plot()+mtext("VAF filtering level with t_alt_count>=2")
+```
+
+</details>
+
+
+It is worth exploring even more stringent levels of filtering in more mutated samples.
+
+### Cisplatin {.tabset}
+
+#### All together
+
+```{r, collapse=FALSE, message=FALSE, results='hide', warning=FALSE}
+
+rainfallPlot(maf=CIS_unfilt %>% 
+  extract.maf() %>%
+  mutate(Tumor_Sample_Barcode="All_Samples") %>%
+  filter(t_alt_count>=2) %>%
+  read.maf(),
+  detectChangePoints = T,
+  tsb="All_Samples"
+)
+```
+
+#### `r CIS_tumornames[1]`
+```{r rainfall plots 1, collapse=FALSE, message=FALSE, results='hide', warning=FALSE}
+
+  rainfallPlot(maf = CIS_unfilt %>% subsetMaf(query="t_alt_count>=2"),
+               detectChangePoints = T,
+               tsb = CIS_tumornames[1])
+  
+```
+
+#### `r CIS_tumornames[2]`
+```{r rainfall plots 2, collapse=FALSE, message=FALSE, results='hide', warning=FALSE}
+
+  rainfallPlot(maf = CIS_unfilt %>% subsetMaf(query="t_alt_count>=2"),
+               detectChangePoints = T,
+               tsb = CIS_tumornames[2])
+  
+  
+```
+
+#### `r CIS_tumornames[3]`
+```{r rainfall plots 3, collapse=FALSE, message=FALSE, results='hide', warning=FALSE}
+
+  rainfallPlot(maf = CIS_unfilt %>% subsetMaf(query="t_alt_count>=2"),
+               detectChangePoints = T,
+               tsb = CIS_tumornames[3])
+  
+  
+```
+
+
+### Carboplatin {.tabset}
+
+#### All together
+
+```{r, collapse=FALSE, message=FALSE, results='hide', warning=FALSE}
+
+rainfallPlot(maf=CARBO_unfilt %>% 
+  extract.maf() %>%
+  mutate(Tumor_Sample_Barcode="All_Samples") %>%
+  filter(t_alt_count>=2) %>%
+  read.maf(),
+  detectChangePoints = T,
+  tsb="All_Samples"
+)
+```
+
+#### `r CARBO_tumornames[1]`
+```{r carbo rainfall plots 1, collapse=FALSE, message=FALSE, results='hide', warning=FALSE}
+
+  rainfallPlot(maf = CARBO_unfilt %>% subsetMaf(query="t_alt_count>=2"),
+               detectChangePoints = T,
+               tsb = CARBO_tumornames[1])
+  
+```
+
+#### `r CARBO_tumornames[2]`
+```{r carbo rainfall plots 2, message=FALSE, warning=FALSE, collapse=FALSE, results='hide'}
+
+  rainfallPlot(maf = CARBO_unfilt %>% subsetMaf(query="t_alt_count>=2"),
+               detectChangePoints = T,
+               tsb = CARBO_tumornames[2])
+  
+  
+```
+
+#### `r CARBO_tumornames[3]`
+```{r carbo rainfall plots 3, collapse=FALSE, message=FALSE, results='hide', warning=FALSE}
+
+  rainfallPlot(maf = CARBO_unfilt %>% subsetMaf(query="t_alt_count>=2"),
+               detectChangePoints = T,
+               tsb = CARBO_tumornames[3])
+  
+  
+```
+
+
+## {-}
+
+We can see in these tables the genomic regions with kataegis. 
+The tables have been also written in a .tsv in `r getwd()`: _`r paste("*", list.files(pattern="Kataegis.tsv"))`_
+
+
+### Kataegis tables {.tabset}
+
+```{r carbo kataegis tables, results='asis'}
+
+kataegis_names <- c()
+
+for (tsv in list.files(pattern = "Kataegis.tsv")) {
+  name <- str_sub(tsv, 1, 22)
+  
+  assign(x = name, value = read.csv(file = tsv, sep = "\t"))
+  
+  kataegis_names <- c(kataegis_names, name)
+  
+  cat('\n\n#####', str_sub(name, 1, 13), '\n\n')
+  
+  cat("\n", paste("Kataegis in tumor", str_sub(name, 1, 13)), "\n")
+  
+  get(name) %>% 
+    kbl() %>%
+    kable_styling(
+      full_width = FALSE,
+      bootstrap_options = c("striped", "hover", "condensed", "responsive")
+    ) %>%
+    scroll_box(width = "100%", height = "200px") %>%
+    print()
+  
+}
+
+
+```
+
+
+### Variants within Kataegis {.tabset}
+
+We can retrieve those and check what variants fall between those positions:
+
+```{r carbo genes in kataegis tables,  fig.show='hold', results='asis'}
+
+
+for (table in kataegis_names) {
+  
+  cat('\n\n#####', str_sub(table, 1, 13), '\n\n')
+  
+
+  for (i in 1:nrow(get(table))) {
+    cat("\n",
+      paste(
+        sep = " ",
+        "Kataegis in Chromosome",
+        get(table)[i, 'Chromosome'],
+        "contains the following genes:"
+      ),
+      "\n"
+    )
+    
+    CARBO_10 %>%
+      extract.maf %>%
+      mutate(Chromosome=case_when(
+        Chromosome == "chrX" ~ "chr23",
+        TRUE ~ as.character(Chromosome)
+      )) %>%
+      filter(
+        Chromosome == paste0("chr", get(table)[i, "Chromosome"]) &
+          Tumor_Sample_Barcode == get(table)[i, "Tumor_Sample_Barcode"] &
+          t_alt_count >= 2 &
+          Start_Position >= get(table)[i, "Start_Position"] &
+          Start_Position <= get(table)[i, "End_Position"]
+      ) %>%
+      select(2, 4, 5, 8, 9, 10, 11, 12, 13, 17, 18) %>%
+      
+      kbl() %>%
+      kable_styling(
+        full_width = FALSE,
+        bootstrap_options = c("striped", "hover", "condensed", "responsive")
+      ) %>%
+      scroll_box(width = "100%", height = "200px") %>%
+      print()
+    
+  }
+  
+}
+
+rm(table)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+## OncodriveCLUSTL {.tabset}
+
+As seen above, mutational hotspots will correspond to the same gene in many cases. 
+It has been observed in many cancer types that mutations in cancer driver genes tend to cluster together in genes and/or particular domains. Upon this principle, a method was created to detect these abnormal clusters: [OncodriveCLUSTL](https://doi.org/10.1093/bioinformatics/btz501).
+
+We can apply this algorithm to our samples to detect these clusters.
+Once again, we will do this with variants above certain thresholds: Depth>=10 & variant reads>2
+
+### Cisplatin
+
+```{r cisplatin oncodrive, message=FALSE, results=FALSE, warning=FALSE}
+
+od.cis_10 <- CIS_10 %>% 
+  subsetMaf(query="t_alt_count>=2") %>%
+  capHS() %>%
+  oncodrive(minMut = 3, AACol = "Protein_Change")
+
+
+od.cis_10 %>% plotOncodrive(bubbleSize = 0.5)
+
+mtext("Oncodrive Bubble plot for mutations clustered in Cisplatin Resistant Tumors, depth>10.", side=3, cex=1, outer = TRUE, line=-2)
+
+```
+
+We can also take these genes and use maftools functionalities to check them in particular in the samples:
+
+```{r cisplatin clustered list, results='asis'}
+cis_clustered.10 <- od.cis_10 %>%
+  filter(fdr <= 0.05) %>%
+  pull(Hugo_Symbol) %>%
+  str_to_title()
+
+cat("Genes with clustered variants. Depth>10 & t_alt_count>=2. FDR < 0.05.","\n")
+cat("<details><summary>Click here to display the list</summary>") 
+
+cat(paste0("- ", cis_clustered.10), sep = "\n")
+
+cat('</details>')
+
+if (sum(cis_clustered.10 %in% flags1000)>0){
+  warning("Caution: the following genes are amongst the top 1000 most commonly mutated genes in the FLAGS dataset:")
+  cat(paste0("- `",cis_clustered.10[cis_clustered.10 %in% flags1000], "`"), sep="\n")
+}
+
+```
+
+
+```{r cisplatin clustered summary plots, message=FALSE, results=FALSE, warning=FALSE}
+CIS_10 %>%
+  subsetMaf(genes = cis_clustered.10,
+            mafObj = TRUE) %>%
+  plotmafSummary(addStat = "median", showBarcodes = TRUE)
+mtext("Summary of genes with clustered variants", line=-1, outer=TRUE)
+CIS_10 %>%
+  subsetMaf(genes = cis_clustered.10,
+            mafObj = TRUE) %>%
+  oncoplot(
+    leftBarLims = c(0, 1),
+    leftBarData = CIS_10@data %>%
+      filter(Hugo_Symbol %in% cis_clustered.10) %>%
+      select(Hugo_Symbol, VAF) %>%
+      arrange(desc(VAF)) %>%
+      distinct(Hugo_Symbol, .keep_all = TRUE)
+  )
+```
+
+
+```{r cisplatin clustered vaf , message=FALSE, results=FALSE, warning=FALSE}
+CIS_10 %>%
+  subsetMaf(genes = cis_clustered.10) %>%
+  plotVaf(
+    vafCol = "VAF",
+    orderByMedian = TRUE,
+    showN = TRUE,
+    top = length(cis_clustered.10)
+  )
+mtext("VAF plot of genes with clustered variants", line=-1, outer=TRUE)
+```
+
+
+```{r cisplatin clustered summaries and csv, message=FALSE, results=FALSE, warning=FALSE}
+CIS_10 %>%
+  subsetMaf(genes = cis_clustered.10) %>% 
+  write.mafSummary(basename = "summaries/cis_clustered.10")
+
+CIS_10 %>% 
+  subsetMaf(genes=cis_clustered.10) %>%
+  extract.maf() %>%
+  write.csv(file="filtered_csvs/cis_clustered_10.csv")
+```
+
+You will find summaries of the mutations in genes in your "summaries" folder, as well as the .csv in the "filtered_csvs" folder.
+
+
+
+### Carboplatin
+
+```{r carboplatin oncodrive, message=FALSE, results=FALSE, warning=FALSE}
+
+od.CARBO_10 <- CARBO_10 %>% 
+  subsetMaf(query="t_alt_count>=2") %>%
+  capHS() %>%
+  oncodrive(minMut = 3, AACol = "Protein_Change")
+
+
+od.CARBO_10 %>% plotOncodrive(bubbleSize = 0.5)
+
+mtext("Oncodrive Bubble plot for mutations clustered in carboplatin Resistant Tumors, depth>10.", side=3, cex=1, outer = TRUE, line=-2)
+
+```
+
+We can also take these genes and use maftools functionalities to check them in particular in the samples:
+
+```{r carboplatin clustered list, results='asis'}
+CARBO_clustered.10 <- od.CARBO_10 %>%
+  filter(fdr <= 0.05) %>%
+  pull(Hugo_Symbol) %>%
+  str_to_title()
+
+cat("Genes with clustered variants. Depth>10 & t_alt_count>=2. FDR < 0.05.","\n")
+cat("<details><summary>Click here to display the list</summary>") 
+
+cat(paste0("- ", CARBO_clustered.10), sep = "\n")
+
+cat('</details>')
+
+if (sum(CARBO_clustered.10 %in% flags1000)>0){
+  warning("Caution: the following genes are amongst the top 1000 most commonly mutated genes in the FLAGS dataset:")
+  cat(paste0("- `",CARBO_clustered.10[CARBO_clustered.10 %in% flags1000], "`"), sep="\n")
+}
+
+```
+
+
+```{r carboplatin clustered summary plots, message=FALSE, results=FALSE, warning=FALSE}
+CARBO_10 %>%
+  subsetMaf(genes = CARBO_clustered.10,
+            mafObj = TRUE) %>%
+  plotmafSummary(addStat = "median", showBarcodes = TRUE)
+mtext("Summary of genes with clustered variants", line=-1, outer=TRUE)
+CARBO_10 %>%
+  subsetMaf(genes = CARBO_clustered.10,
+            mafObj = TRUE) %>%
+  oncoplot(
+    leftBarLims = c(0, 1),
+    leftBarData = CARBO_10@data %>%
+      filter(Hugo_Symbol %in% CARBO_clustered.10) %>%
+      select(Hugo_Symbol, VAF) %>%
+      arrange(desc(VAF)) %>%
+      distinct(Hugo_Symbol, .keep_all = TRUE)
+  )
+```
+
+
+```{r carboplatin clustered vaf , message=FALSE, results=FALSE, warning=FALSE}
+CARBO_10 %>%
+  subsetMaf(genes = CARBO_clustered.10) %>%
+  plotVaf(
+    vafCol = "VAF",
+    orderByMedian = TRUE,
+    showN = TRUE,
+    top = length(CARBO_clustered.10)
+  )
+mtext("VAF plot of genes with clustered variants", line=-1, outer=TRUE)
+```
+
+
+```{r carboplatin clustered summaries and csv, message=FALSE, results=FALSE, warning=FALSE}
+CARBO_10 %>%
+  subsetMaf(genes = CARBO_clustered.10) %>% 
+  write.mafSummary(basename = "summaries/CARBO_clustered.10")
+
+CARBO_10 %>% 
+  subsetMaf(genes=CARBO_clustered.10) %>%
+  extract.maf() %>%
+  write.csv(file="filtered_csvs/CARBO_clustered_10.csv")
+```
+
+You will find summaries of the mutations in genes in your "summaries" folder, as well as the .csv in the "filtered_csvs" folder.
+
+
+
+
+
+# Number of mutations comparison
+
+Rather than looking at the position of the mutations, we can directly compare how many mutations a gene harbors. 
+This can be done using a modified version of the original maftools mafCompare(): mutCompare(). 
+mutCompare() looks at total variants within a gene rather than in how many samples a gene is mutated, as mafCompare does.
+
+This is intended to use with this kind of data, where there are few samples that are very sequenced and come from a very similar source. For large cohorts, use mafCompare() instead.
+
+I will do this at a filtering level of Depth > 10 and variant reads >2, to filter out possible artifacts. 
+
+**IMPORTANT: THIS SHOULD BE REPEATED WITH THE UNFILTERED MAF FILES BEFORE PANEL OF NORMALS WHEN GENEVIA SENDS THEM**
+
+```{r mutcompare, results='hide'}
+comp.unfilt <- mutCompare(
+  m1 = CIS_unfilt %>% subsetMaf(query="t_alt_count>=2"),
+  m2 = CARBO_unfilt %>% subsetMaf(query="t_alt_count>=2"),
+  m1Name = "Cisplatin Resistant",
+  m2Name = "Carboplatin Resistant",
+  minMut = 2
+)
+
+
+```
+
+We can check the tables directly and look for genes of interest or plot the odds ratio in a forest plot:
+Importantly, when using mutcompare we have to use the p-value instead of the adjusted p-value, since the latter is adjusted based on the number of samples rather than the number of mutations (as inherited from mafCompare)
+
+
+```{r mutcompare plots}
+
+comp.unfilt %>% forestPlot(pVal = 0.05, geneFont = 1)
+
+```
+
+In these datasets, as the number of mutations is overall quite low, there were no significant results for number of mutations. For context, in both carboplatin and cisplatin datasets, the most mutated gene is Itga6 with 10 and 11 mutations respectively. Second-most mutated gene in each dataset has 6 mutations (Vcp) and 5 (Setd3).
+
+
+# Drug interactions and Druggable genome {.tabset}
+
+We can test the genes mutated in our samples against databases of "druggable genes", that is to say, genes that encode proteins we can target clinically. In our case, as most of the mutations will be inactivating and causing resistance, this is only marginally useful. However, checking the available drugs against a particular gene, we can find enhancers and/or agonists. Moreover, some mutations might be activating and therefore could be the source of 
+
+## Cisplatin {.tabset}
+
+### Depth>10, Var. reads >=2 
+
+```{r CIS_drugs.base, message=FALSE, results='hide'}
+drugs.CIS_base<-CIS_10 %>%
+  capHS() %>%
+  subsetMaf(query = "t_alt_count>=2") %>%
+  drugInteractions() 
+```
+
+```{r CIS_drugs.base table}
+drugs.CIS_base %>% 
+  kbl() %>%
+  kable_styling(
+    full_width = FALSE,
+    bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="100%", height = "300px")
+```
+
+### Enriched genes
+
+```{r CIS_drugs.enriched, message=FALSE, results='hide'}
+drugs.CIS_enriched <-CIS_10 %>%
+  capHS() %>%
+  subsetMaf(genes=str_to_upper(cis_vafenriched)) %>%
+  drugInteractions()
+```
+
+
+```{r CIS_drugs.enriched table, message=FALSE}
+drugs.CIS_enriched%>% 
+  kbl() %>%
+  kable_styling(
+    full_width = FALSE,
+    bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="100%", height = "300px")
+```
+
+### Clustered Variants
+
+```{r CIS_drugs.cluster, message=FALSE, results='hide'}
+drugs.CIS_cluster <-CIS_10 %>%
+  capHS() %>%
+  subsetMaf(genes=str_to_upper(cis_clustered.10)) %>%
+  drugInteractions()
+```
+
+
+```{r CIS_drugs.cluster table, message=FALSE}
+drugs.CIS_cluster %>% 
+  kbl() %>%
+  kable_styling(
+    full_width = FALSE,
+    bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="100%", height = "300px")
+```
+
+
+
+## Carboplatin {.tabset}
+### Depth>10, Var. reads >=2 
+
+```{r CARBO_drugs.base, message=FALSE, results='hide'}
+drugs.CARBO_base<-CARBO_10 %>%
+  capHS() %>%
+  subsetMaf(query = "t_alt_count>=2") %>%
+  drugInteractions() 
+```
+
+```{r CARBO_drugs.base table}
+drugs.CARBO_base %>% 
+  kbl() %>%
+  kable_styling(
+    full_width = FALSE,
+    bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="100%", height = "300px")
+```
+
+### Enriched genes
+
+```{r CARBO_drugs.enriched, message=FALSE, results='hide'}
+drugs.CARBO_enriched <-CARBO_10 %>%
+  capHS() %>%
+  subsetMaf(genes=str_to_upper(CARBO_vafenriched)) %>%
+  drugInteractions()
+```
+
+
+```{r CARBO_drugs.enriched table, message=FALSE}
+drugs.CARBO_enriched%>% 
+  kbl() %>%
+  kable_styling(
+    full_width = FALSE,
+    bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="100%", height = "300px")
+```
+
+### Clustered Variants
+
+```{r CARBO_drugs.cluster, message=FALSE, results='hide'}
+drugs.CARBO_cluster <-CARBO_10 %>%
+  capHS() %>%
+  subsetMaf(genes=str_to_upper(CARBO_clustered.10)) %>%
+  drugInteractions()
+```
+
+
+```{r CARBO_drugs.cluster table, message=FALSE}
+drugs.CARBO_cluster %>% 
+  kbl() %>%
+  kable_styling(
+    full_width = FALSE,
+    bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% 
+  scroll_box(width="100%", height = "300px")
+```
+
+
+
+
+# {-}
+
+Additionally, we can check if there are drugs associated with each gene that we have detected above:
+
+```{r Drugs widget 2 , echo=TRUE}
+
+sidebarLayout(
+  sidebarPanel(
+    selectInput(
+      inputId = "drugs.sel",
+      label = "Or pick from the list:",
+      choices = list(Cisplatin=c(drugs.CIS_base$Gene, drugs.CIS_enriched$Gene, drugs.CIS_cluster$Gene), Carboplatin = c(drugs.CARBO_base$Gene, drugs.CARBO_enriched$Gene, drugs.CARBO_cluster$Gene))
+    )
+  )
+  ,
+  mainPanel( 
+    
+    renderDataTable(
+      
+      PD_10 %>% 
+        capHS() %>% 
+        drugInteractions(genes =input$drugs.sel, drugs=TRUE) %>%
+        select(Gene, interaction_types, drug_name)
+    
+      )
+  )
+)
+
+```
+
+# Mutational Signature Analysis
+
+In order to perform an analysis of signatures, we will use the functions included in maftools together with the NMF package. 
+Signature analysis analyzes which nucleotides are adjacent to each SNP. From that matrix, Non-negative Matrix Factorization (NMF) is performed in order to extract a set number of signatures. NMF is a process that tries to extract n matrices from an original single one, so that those n matrices explain the original one while being as different between them as possible. 
+
+```{r, results='hide'}
+tnm.CIS_all.8 <-
+  trinucleotideMatrix(
+    CIS_all %>% subsetMaf(query = "Start_Position>20"),
+    useSyn = TRUE,
+    ref_genome = "BSgenome.Mmusculus.UCSC.mm8"
+  )
+tnm.CIS_all.9 <-
+  trinucleotideMatrix(
+    CIS_all %>% subsetMaf(query = "Start_Position>20"),
+    useSyn = TRUE,
+    ref_genome = "BSgenome.Mmusculus.UCSC.mm9"
+  )
+tnm.CIS_all.10 <-
+  trinucleotideMatrix(
+    CIS_all %>% subsetMaf(query = "Start_Position>20"),
+    useSyn = TRUE,
+    ref_genome = "BSgenome.Mmusculus.UCSC.mm10"
+  )
+
+
+tnm.CARBO_all.8 <-
+  trinucleotideMatrix(
+    CARBO_all %>% subsetMaf(query = "Start_Position>20"),
+    useSyn = TRUE,
+    ref_genome = "BSgenome.Mmusculus.UCSC.mm8"
+  )
+tnm.CARBO_all.9 <-
+  trinucleotideMatrix(
+    CARBO_all %>% subsetMaf(query = "Start_Position>20"),
+    useSyn = TRUE,
+    ref_genome = "BSgenome.Mmusculus.UCSC.mm9"
+  )
+tnm.CARBO_all.10 <-
+  trinucleotideMatrix(
+    CARBO_all %>% subsetMaf(query = "Start_Position>20"),
+    useSyn = TRUE,
+    ref_genome = "BSgenome.Mmusculus.UCSC.mm10"
+  )
+```
+
+## APOBEC signature  
+
+Initially, the package allows us to check for a specific type of mutational signature: the APOBEC signature. It is one of the most prominent mutation signatures in cancer and derives from the activity of APOBEC3A (A3A) and APOBEC3B (A3B) cytosine deaminases. This signature has been reported to drive tumorigenesis and facilitate the emergence of drug resistance.
+
+ - Cisplatin samples 
+ 
+```{r APOBEC check}
+if (sum(tnm.CIS_all.10$APOBEC_scores$fdr < 0.05) > 0) {
+  tnm.CIS_all %>% plotApobecDiff()
+} else {
+    message("No APOBEC signatures detected in these samples") 
+  }
+```
+
+ - Carboplatin samples 
+
+```{r carbo APOBEC check}
+if (sum(tnm.CARBO_all.10$APOBEC_scores$fdr < 0.05) > 0) {
+  tnm.CARBO_all %>% plotApobecDiff()
+} else {
+    message("No APOBEC signatures detected in these samples") 
+  }
+```
+
+
+## Cophenetic plot and estimation of the number of signatures
+
+In this process, one of the most important user defined parameters is how many signatures we aim to extract. We can perform goodness of fit analysis on simulations of the extractions to plot cophenetic coeficcients, of which we should pick the lowest.
+
+
+```{r, results='hide', fig.height=3.5 , out.width="50%", fig.show='hold'}
+tnm.CIS_all.10 %>% estimateSignatures(nMin = 2, nTry = 3, parallel = 2, nrun=10)
+mtext(paste0("Cisplatin signatures against mm10"))
+
+tnm.CARBO_all.10 %>% estimateSignatures(nMin = 2, nTry = 3, parallel = 2, nrun=10)
+mtext(paste0("Carboplatin signatures against mm10"))
+```
+
+## Extracting Mutational Signatures {.tabset}
+
+In this part, we extract the signatures from our data and compare them to [COSMIC SBS v3](https://cancer.sanger.ac.uk/signatures/sbs/) or [legacy](https://cancer.sanger.ac.uk/cosmic/signatures_v2) mutational signature databases.
+
+As we don't have many samples, we are very limited in the number of possible signatures. Both cophenetic metrics are lower at n=3 signatures, so I will use n=3 for both cisplatin and carboplatin datasets.. 
+
+
+
+### Cisplatin {.tabset}
+
+```{r, , results=FALSE, message=FALSE, warning=FALSE}
+sig3.CIS_all.10<- tnm.CIS_all.10 %>% extractSignatures(n=3)
+```
+
+#### SBS v3 
+
+```{r, fig.show='hold', results=FALSE, message=FALSE, warning=FALSE, fig.height=3.5, out.width="120%"}
+sbs_sig3.CIS_all.10 <- compareSignatures(sig3.CIS_all.10, sig_db="SBS")
+
+sbs_sig3.CIS_all.10$cosine_similarities %>% pheatmap::pheatmap(main = "Cosine Similarity against COSMIC SBS V3 signatures", cluster_rows = FALSE)
+
+```
+
+Here we can see both signatures matched against the COSMIC SBS v3 signatures, the latest version. We are able to pin point particular differences and find the reference signatures closest to those extracted from our samples. Note the resemblance to SBS signature 3, which is the one characteristic of HR-deficient tumors.
+
+We are also able to plot the signature mutational pattern and how much each tumor sample contributed to each signature:
+
+```{r, fig.show='hold', results=FALSE, message=FALSE, warning=FALSE, out.width="50%"}
+
+plotSignatures(sig3.CIS_all.10, sig_db = "SBS", title_size = 1.6)
+
+contr.sig3.CIS_all.10 <-
+  sig3.CIS_all.10$contributions %>%
+  stack() %>%
+  as.data.frame %>%
+  separate(col,
+           sep = "_",
+           remove = FALSE,
+           into = c(NA, "Response")
+  )
+
+contr.sig3.CIS_all.10$tumor<-factor(contr.sig3.CIS_all.10$col, levels=CIS_tumornames)
+
+contr.sig3.CIS_all.10 %>%
+  ggplot(aes(tumor, value, fill = col)) +
+  geom_col() +
+  facet_wrap( ~ row) + 
+  ggtitle(label="Contribution of tumors to signatures")
+ 
+ 
+```
+
+#### Legacy
+
+```{r, fig.show='hold', results=FALSE, message=FALSE, warning=FALSE, fig.height=3.5, out.width="120%"}
+leg_sig3.CIS_all.10 <- compareSignatures(sig3.CIS_all.10, sig_db="legacy")
+
+leg_sig3.CIS_all.10$cosine_similarities %>% pheatmap::pheatmap(main = "Cosine Similarity against COSMIC legacy 30 signatures", cluster_rows = FALSE)
+
+```
+
+Here we can see both signatures matched against the COSMIC Legacy signatures, the original 30. We are able to pin point particular differences and find the reference signatures closest to those extracted from our samples. Note the resemblance to COSMIC signature 3, which is the one characteristic of HR-deficient tumors.
+
+We are also able to plot the signature mutational pattern and how much each tumor sample contributed to each signature:
+
+```{r, fig.show='hold', results=FALSE, message=FALSE, warning=FALSE, out.width="50%"}
+
+plotSignatures(sig3.CIS_all.10, sig_db = "legacy", title_size = 1.6)
+contr.sig3.CIS_all.10 <-
+  sig3.CIS_all.10$contributions %>%
+  stack() %>%
+  as.data.frame %>%
+  separate(col,
+           sep = "_",
+           remove = FALSE,
+           into = c(NA, "Response")
+  )
+
+contr.sig3.CIS_all.10$tumor<-factor(contr.sig3.CIS_all.10$col, levels=CIS_tumornames)
+
+contr.sig3.CIS_all.10 %>%
+  ggplot(aes(tumor, value, fill = col)) +
+  geom_col() +
+  facet_wrap( ~ row) + 
+  ggtitle(label="Contribution of tumors to signatures")
+ 
+ 
+```
+
+
+
+
+
+
+### Carboplatin {.tabset}
+
+```{r, , results=FALSE, message=FALSE, warning=FALSE}
+sig3.CARBO_all.10<- tnm.CARBO_all.10 %>% extractSignatures(n=3)
+```
+
+#### SBS v3 
+
+```{r, fig.show='hold', results=FALSE, message=FALSE, warning=FALSE, fig.height=3.5, out.width="120%"}
+sbs_sig3.CARBO_all.10 <- compareSignatures(sig3.CARBO_all.10, sig_db="SBS")
+
+sbs_sig3.CARBO_all.10$cosine_similarities %>% pheatmap::pheatmap(main = "Cosine Similarity against COSMIC SBS V3 signatures", cluster_rows = FALSE)
+
+```
+
+Here we can see both signatures matched against the COSMIC SBS v3 signatures, the latest version. We are able to pin point particular differences and find the reference signatures closest to those extracted from our samples. Note the resemblance to SBS signature 3, which is the one characteristic of HR-deficient tumors.
+
+We are also able to plot the signature mutational pattern and how much each tumor sample contributed to each signature:
+
+```{r, fig.show='hold', results=FALSE, message=FALSE, warning=FALSE, out.width="50%"}
+
+plotSignatures(sig3.CARBO_all.10, sig_db = "SBS", title_size = 1.6)
+
+contr.sig3.CARBO_all.10 <-
+  sig3.CARBO_all.10$contributions %>%
+  stack() %>%
+  as.data.frame %>%
+  separate(col,
+           sep = "_",
+           remove = FALSE,
+           into = c(NA, "Response")
+  )
+
+contr.sig3.CARBO_all.10$tumor<-factor(contr.sig3.CARBO_all.10$col, levels=CARBO_tumornames)
+
+contr.sig3.CARBO_all.10 %>%
+  ggplot(aes(tumor, value, fill = col)) +
+  geom_col() +
+  facet_wrap( ~ row) + 
+  ggtitle(label="Contribution of tumors to signatures")
+ 
+ 
+```
+
+#### Legacy
+
+```{r, fig.show='hold', results=FALSE, message=FALSE, warning=FALSE, fig.height=3.5, out.width="120%"}
+leg_sig3.CARBO_all.10 <- compareSignatures(sig3.CARBO_all.10, sig_db="legacy")
+
+leg_sig3.CARBO_all.10$cosine_similarities %>% pheatmap::pheatmap(main = "Cosine Similarity against COSMIC legacy 30 signatures", cluster_rows = FALSE)
+
+```
+
+Here we can see both signatures matched against the COSMIC Legacy signatures, the original 30. We are able to pin point particular differences and find the reference signatures closest to those extracted from our samples. Note the resemblance to COSMIC signature 3, which is the one characteristic of HR-deficient tumors.
+
+We are also able to plot the signature mutational pattern and how much each tumor sample contributed to each signature:
+
+```{r, fig.show='hold', results=FALSE, message=FALSE, warning=FALSE, out.width="50%"}
+
+plotSignatures(sig3.CARBO_all.10, sig_db = "legacy", title_size = 1.6)
+contr.sig3.CARBO_all.10 <-
+  sig3.CARBO_all.10$contributions %>%
+  stack() %>%
+  as.data.frame %>%
+  separate(col,
+           sep = "_",
+           remove = FALSE,
+           into = c(NA, "Response")
+  )
+
+contr.sig3.CARBO_all.10$tumor<-factor(contr.sig3.CARBO_all.10$col, levels=CARBO_tumornames)
+
+contr.sig3.CARBO_all.10 %>%
+  ggplot(aes(tumor, value, fill = col)) +
+  geom_col() +
+  facet_wrap( ~ row) + 
+  ggtitle(label="Contribution of tumors to signatures")
+ 
+ 
+```
+
+
+
+
+
+## Trying to separate resistant/sensitive signatures {.tabset}
+
+The process of extracting individual signatures from a group of samples can serve itself as an analysis. In the same manner that we perform non-hierarchical clusterization to check if it matches known features that the algorithm doesn't know, we can see if this algorithm is able to separate signatures extracted from resistant and sensitive samples. 
+We will include sensitive tumors in and perform the analysis again. In an ideal situation, the lowest cophenetic score would correspond to n=2 signatures, and contributions to each of the signatures would match our phenotype.
+
+```{r, results=FALSE, message=FALSE, warning=FALSE, fig.height=3.5}
+
+tnm.all <- trinucleotideMatrix(PD_all %>% subsetMaf(query="Start_Position>20"),
+                               useSyn = TRUE,
+                               ref_genome = "BSgenome.Mmusculus.UCSC.mm10")
+
+tnm.all %>% 
+  estimateSignatures(nTry = 6, 
+                     nrun = 10,
+                     parallel = 2)
+mtext(paste0("Signatures against mm10"))
+
+```
+
+```{r APOBEC check all samples}
+if (sum(tnm.all$APOBEC_scores$fdr < 0.05) > 0) {
+  tnm.all %>% plotApobecDiff()
+} else {
+    message("No APOBEC signatures detected in these samples") 
+  }
+
+```
+
+Looking at the cophenetic plot, we are not in the ideal situation described above. The difference is not very big (look at the Y-axis), so it is however not wrong to try and split the matrix into two signatures, but as the goodness of fit is higher, we will also try with 6 and check the signatures and distribution.
+
+### Two signatures {.tabset}
+
+```{r, warning=FALSE, results=FALSE, message=FALSE, warning=FALSE}
+sig2.all<- tnm.all %>% extractSignatures(n=2)
+```
+
+#### SBS v3 
+
+```{r, results=FALSE, fig.show='hold', message=FALSE, warning=FALSE, fig.height=3, out.width="120%"}
+sbs_sig2.all <- compareSignatures(sig2.all, sig_db="SBS")
+
+sbs_sig2.all$cosine_similarities %>% pheatmap::pheatmap(main = "Cosine Similarity against COSMIC SBS V3 signatures", cluster_rows = TRUE)
+
+```
+
+```{r, fig.show='hold', results=FALSE, message=FALSE, warning=FALSE, out.width="50%"}
+
+plotSignatures(sig2.all, sig_db = "SBS", title_size = 1.6)
+
+contr.sig2.all <-
+  sig2.all$contributions %>%
+  stack() %>%
+  as.data.frame %>%
+  mutate(Resistance=case_when(
+    col %in% CIS_tumornames ~ "Cisplatin",
+    col %in% CARBO_tumornames ~ "Carboplatin",
+    TRUE ~ as.character(col)
+  ))
+
+contr.sig2.all$tumor<-factor(contr.sig2.all$col, levels=all_tumornames)
+
+contr.sig2.all %>%
+  ggplot(aes(tumor, value, fill = Resistance)) +
+  geom_col() +
+  facet_wrap( ~ row)+ 
+  ggtitle(label="Contribution of tumors to signatures")
+ 
+```
+
+#### Legacy
+```{r, results=FALSE, fig.show='hold', message=FALSE, warning=FALSE, fig.height=3.5, out.width="120%"}
+sbs_sig2.all <- compareSignatures(sig2.all, sig_db="legacy")
+
+sbs_sig2.all$cosine_similarities %>% pheatmap::pheatmap(main = "Cosine Similarity against COSMIC legacy 30 signatures", cluster_rows = TRUE)
+
+```
+
+```{r, fig.show='hold', results=FALSE, message=FALSE, warning=FALSE, out.width="50%"}
+
+plotSignatures(sig2.all, sig_db = "legacy", title_size = 1.6)
+
+contr.sig2.all <-
+  sig2.all$contributions %>%
+  stack() %>%
+  as.data.frame %>%
+  mutate(Resistance=case_when(
+    col %in% CIS_tumornames ~ "Cisplatin",
+    col %in% CARBO_tumornames ~ "Carboplatin",
+    TRUE ~ as.character(col)
+  ))
+
+contr.sig2.all$tumor<-factor(contr.sig2.all$col, levels=all_tumornames)
+
+contr.sig2.all %>%
+  ggplot(aes(tumor, value, fill = Resistance)) +
+  geom_col() +
+  facet_wrap( ~ row)+ 
+  ggtitle(label="Contribution of tumors to signatures")
+ 
+```
+
+
+### Six signatures {.tabset}
+
+```{r, warning=FALSE, results=FALSE, message=FALSE, warning=FALSE}
+sig6.all<- tnm.all %>% extractSignatures(n=6)
+```
+
+#### SBS v3 
+
+```{r, results=FALSE, fig.show='hold', message=FALSE, warning=FALSE, fig.height=3, out.width="120%"}
+sbs_sig6.all <- compareSignatures(sig6.all, sig_db="SBS")
+
+sbs_sig6.all$cosine_similarities %>% pheatmap::pheatmap(main = "Cosine Similarity against COSMIC SBS V3 signatures", cluster_rows = TRUE)
+
+```
+
+```{r, fig.show='hold', results=FALSE, message=FALSE, warning=FALSE}
+
+plotSignatures(sig6.all, sig_db = "SBS", title_size = 1.6)
+
+contr.sig6.all <-
+  sig6.all$contributions %>%
+  stack() %>%
+  as.data.frame %>%
+  mutate(Resistance=case_when(
+    col %in% CIS_tumornames ~ "Cisplatin",
+    col %in% CARBO_tumornames ~ "Carboplatin",
+    TRUE ~ as.character(col)
+  ))
+
+contr.sig6.all$tumor<-factor(contr.sig6.all$col, levels=all_tumornames)
+
+contr.sig6.all %>%
+  ggplot(aes(tumor, value, fill = Resistance)) +
+  geom_col() +
+  facet_wrap( ~ row)+ 
+  ggtitle(label="Contribution of tumors to signatures")
+
+```
+
+#### Legacy
+```{r, results=FALSE, fig.show='hold', message=FALSE, warning=FALSE, fig.height=3.5, out.width="120%"}
+sbs_sig6.all <- compareSignatures(sig6.all, sig_db="legacy")
+
+sbs_sig6.all$cosine_similarities %>% pheatmap::pheatmap(main = "Cosine Similarity against COSMIC legacy 30 signatures", cluster_rows = TRUE)
+
+```
+
+```{r, fig.show='hold', results=FALSE, message=FALSE, warning=FALSE}
+
+plotSignatures(sig6.all, sig_db = "legacy", title_size = 1.6)
+
+contr.sig6.all <-
+  sig6.all$contributions %>%
+  stack() %>%
+  as.data.frame %>%
+  mutate(Resistance=case_when(
+    col %in% CIS_tumornames ~ "Cisplatin",
+    col %in% CARBO_tumornames ~ "Carboplatin",
+    TRUE ~ as.character(col)
+  ))
+
+contr.sig6.all$tumor<-factor(contr.sig6.all$col, levels=all_tumornames)
+
+contr.sig6.all %>%
+  ggplot(aes(tumor, value, fill = Resistance)) +
+  geom_col() +
+  facet_wrap( ~ row)+ 
+  ggtitle(label="Contribution of tumors to signatures")
+ 
+```
+
+## {-}
+
+We can test if the contributions to each signature are statistically different:
+
+ - Two signatures
+```{r, results=TRUE}
+wilcox.test(value ~ Resistance, data = contr.sig2.all %>% filter(row == "Signature_1"))
+wilcox.test(value ~ Resistance, data = contr.sig2.all %>% filter(row == "Signature_2"))
+```
+
+- Four signatures
+
+```{r, results=TRUE}
+wilcox.test(value ~ Resistance, data = contr.sig6.all %>% filter(row == "Signature_1"))
+wilcox.test(value ~ Resistance, data = contr.sig6.all %>% filter(row == "Signature_2"))
+wilcox.test(value ~ Resistance, data = contr.sig6.all %>% filter(row == "Signature_3"))
+wilcox.test(value ~ Resistance, data = contr.sig6.all %>% filter(row == "Signature_4"))
+wilcox.test(value ~ Resistance, data = contr.sig6.all %>% filter(row == "Signature_5"))
+wilcox.test(value ~ Resistance, data = contr.sig6.all %>% filter(row == "Signature_6"))
+```
+
+As we can see above, there is no clear separation between the signatures corresponding to a particular phenotype. Resistance to Docetaxel does not have much to do with DNA damaging drugs, and the resistant/sensitivity associated mutations that we would expect to find are not expected to be intrinsically related to DNA repair or DNA modifications, so this is quite expected.
+
+## Checking differences between reference genomes
+
+One of the main problems with this signature analysis is that we can only use genomes that are available in the BSGenome package:
+
+<details> <summary>Click here to display available genomes</summary>
+```{r, results='asis'}
+
+cat(paste("- ", BSgenome::available.genomes()), sep='\n')
+
+```
+</details>
+
+
+As you can see, the available mouse genome assemblies are mm8 (MGSCv36), mm9 (MGSCv37) and mm10 (GRCm38). This can be a contention point, since our samples are from FVB/NJ mouse and therefore should use that assembly as a reference. In all the analysis above I used GRCm38 (mm10), which is the most modern of the three. However, the information about which aminoacids are contiguous to each mutation comes directly from the reference genome and this could lead to masking of signatures. 
+It is quite unlikely that all differences between the genomes would coincidentally match up to a particular mutation and therefore create a false positive signature. The main problem is that randomly different nucleotides could mask an existing pattern of mutations, blurring an existing signature.
+
+There is not much we can do about this for now (until BSGenome implements the FVB/NJ or we craft it ourselves) but just in case, I used all available reference genomes to repeat the analysis and check for differences:
+
+```{r, results=FALSE, message=FALSE, warning=FALSE, out.width="33%"}
+tnm.CIS_all.8 <-
+  trinucleotideMatrix(
+    CIS_all %>% subsetMaf(query = "Start_Position>20"),
+    useSyn = TRUE,
+    ref_genome = "BSgenome.Mmusculus.UCSC.mm8"
+  )
+tnm.CIS_all.9 <-
+  trinucleotideMatrix(
+    CIS_all %>% subsetMaf(query = "Start_Position>20"),
+    useSyn = TRUE,
+    ref_genome = "BSgenome.Mmusculus.UCSC.mm9"
+  )
+
+cat("Cophenetic plots")
+
+for(i in 8:10){
+  get(paste0("tnm.CIS_all.", i)) %>%
+    estimateSignatures(nMin = 2,
+                       nTry = 3,
+                       parallel = 2)
+  mtext(paste0("Signatures against mm",i))
+}
+```
+
+
+```{r, results='asis', message=FALSE, warning=FALSE, out.width="50%", fig.show='hold'}
+for(i in 8:10){
+  
+  tempsig<- get(paste0("tnm.CIS_all.", i)) %>%
+    extractSignatures(n=3)
+  
+  assign(x=paste0("sig.CIS_all.", i), value=tempsig)
+ 
+  
+  plotSignatures(get(paste0("sig.CIS_all.", i)), sig_db = "legacy", yaxisLim = NA)
+  plotSignatures(get(paste0("sig.CIS_all.", i)), sig_db = "SBS", yaxisLim = NA)
+  
+  tempcomp.l<- tempsig %>% compareSignatures(sig_db="legacy")
+  
+  tempcomp.l$cosine_similarities %>% 
+    pheatmap(cluster_rows = FALSE, main = paste0("Cosine similarities against original signatures, mm", i))
+  
+  tempcomp.S<- tempsig %>% compareSignatures(sig_db="SBS")
+  
+  tempcomp.S$cosine_similarities %>% 
+    pheatmap(cluster_rows = FALSE, main = paste0("Cosine similarities against SBS signatures, mm", i))
+  
+  rm(tempsig, tempcomp.l, tempcomp.S)
+}
+
+```
+
+
+# Lollipop Plot
+
+```{r}
+sidebarLayout(
+  mainPanel(width = 9,
+            renderPlot(
+              lollipopPlot2(
+                m1 = capHS(get(input$lol.resmaf)),
+                m2 = capHS(get(input$lol.senmaf)),
+                m1_name = "Cisplatin Resistant",
+                m2_name = "Carboplatin Resistant",
+                gene = str_to_upper(input$lol.gene)
+              )
+            )
+    
+  ),
+   sidebarPanel(width = 3,
+               
+               textInput(inputId = "lol.gene",
+                         label = "Gene to plot",
+                         value = "Itga6"
+               ),
+               
+               selectInput(inputId = "lol.resmaf",
+                           label = "Cisplatin MAF",
+                           choices = CIS_mafs,
+                           selected = "CIS_unfilt"
+               ),
+               
+               selectInput(inputId = "lol.senmaf",
+                           label = "Carboplatin MAF",
+                           choices = CARBO_mafs,
+                           selected = "CARBO_unfilt"
+               )
+               
+  )
+)
+```
+
+# Venn Diagrams
+
+```{r, warning=FALSE}
+CIS_genes <- CIS_unfilt %>% extract.maf() %>% pull(Hugo_Symbol) %>% unique()
+CARBO_genes <- CARBO_unfilt %>% extract.maf() %>% pull(Hugo_Symbol) %>% unique()
+
+overlap <- list(
+  Cisplatin_all = CIS_genes,
+  Carboplatin_all = CARBO_genes,
+  Cisplatin_enriched = cis_vafenriched,
+  Cisplatin_clustered = cis_clustered.10,
+  Carboplatin_enriched = CARBO_vafenriched,
+  Carboplatin_clustered = CARBO_clustered.10
+)
+
+ggVennDiagram(overlap[3:6],
+          show_intersect = TRUE,
+          set_size=1,
+          label = "count")
+```
+
+```{r}
+sidebarLayout(
+  sidebarPanel(
+    width = 3,
+    
+    checkboxGroupInput(
+      inputId = "venn.list",
+      label = "Groups to plot",
+      choices = names(overlap),
+      selected = c("Cisplatin_all", "Carboplatin_all")
+    ),
+    textInput(
+      inputId = "venn.col.low",
+      label = "'Low' color", 
+      value = "light gray",
+      placeholder = "Find R colors online"
+    ),
+    textInput(
+      inputId = "venn.col.high",
+      label = "'High' color", 
+      value = "violet",
+      placeholder = "Find R colors online"
+    )
+  ),
+  mainPanel(
+    width = 9,
+    renderPlot(
+      ggVennDiagram(
+        overlap[str_detect(names(overlap), input$venn.list)],
+        label = "count",
+        label_alpha = 0,
+        edge_lty = 0) +
+        scale_fill_continuous(low = input$venn.col.low, high = input$venn.col.high)
+    )
+  )
+)
+```
