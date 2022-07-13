@@ -1,0 +1,9 @@
+sample	segments	stdev	mad	iqr	bivar
+annotated_cns/anno_D2_CTRL.call.cns	-	0.532026	0.411962	0.499192	0.492631
+annotated_cns/anno_D3_VEHICLE.call.cns	-	0.516274	0.245994	0.640582	0.487665
+annotated_cns/anno_D4_CIS.call.cns	-	1.21435	0.791354	1.06076	0.840668
+annotated_cns/anno_D5_CIS.call.cns	-	0.48817	0.443826	0.533051	0.465395
+annotated_cns/anno_D63_CARBO.call.cns	-	0.724446	0.687485	0.906453	0.686513
+annotated_cns/anno_D6_CARBO.call.cns	-	0.447258	0.323895	0.506692	0.399424
+annotated_cns/anno_D7_CARBO.call.cns	-	0.880121	0.633769	0.941192	0.828799
+annotated_cns/anno_D94_CIS.call.cns	-	0.686844	0.61488	0.808271	0.64849
