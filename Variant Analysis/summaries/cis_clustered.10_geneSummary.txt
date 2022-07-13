@@ -1,0 +1,7 @@
+Hugo_Symbol	Frame_Shift_Del	Frame_Shift_Ins	In_Frame_Ins	Missense_Mutation	Splice_Site	total	MutatedSamples	AlteredSamples
+Itga6	0	1	2	5	3	11	3	3
+Setd3	0	0	0	5	0	5	3	3
+Cks2	0	0	1	2	0	3	3	3
+Hspa8	0	0	1	3	1	5	2	2
+Pebp1	2	0	0	2	0	4	2	2
+Ppia	0	1	2	0	0	3	2	2

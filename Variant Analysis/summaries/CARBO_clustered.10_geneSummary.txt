@@ -1,0 +1,13 @@
+Hugo_Symbol	Frame_Shift_Del	Frame_Shift_Ins	Missense_Mutation	Nonsense_Mutation	Splice_Site	total	MutatedSamples	AlteredSamples
+Itga6	0	0	7	0	3	10	3	3
+Rpl10	0	0	5	0	0	5	3	3
+Cdv3	0	0	3	1	0	4	3	3
+Rbpj	0	3	0	0	1	4	3	3
+Setd3	0	0	4	0	0	4	3	3
+Tnfaip8	0	3	1	0	0	4	3	3
+Cks2	0	0	3	0	0	3	3	3
+Me1	0	0	3	0	0	3	3	3
+Psat1	0	0	3	0	0	3	3	3
+Pebp1	2	0	2	0	0	4	2	2
+Tbc1d14	0	1	2	0	1	4	2	2
+Eif4e	0	2	1	0	0	3	2	2

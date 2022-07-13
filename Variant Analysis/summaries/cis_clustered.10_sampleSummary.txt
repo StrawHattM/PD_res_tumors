@@ -1,0 +1,4 @@
+Tumor_Sample_Barcode	Frame_Shift_Del	Frame_Shift_Ins	In_Frame_Ins	Missense_Mutation	Splice_Site	total
+D4	1	2	1	7	1	12
+D5	1	0	1	7	2	11
+D94	0	0	4	3	1	8
